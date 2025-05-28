@@ -23,8 +23,8 @@ include some badges such as build status, text coverage, etc.
 
 ## installation
 
-'''
+```
     git clone https://github.com/username/projectname.git
     cd projectname
     pip install requirements.txt
-'''
+```
