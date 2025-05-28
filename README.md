@@ -14,9 +14,7 @@ include some badges such as build status, text coverage, etc.
 ## Features
   
   - Feature 1
-
   - Feature 2
-
   - Feature 3
 
 ---
