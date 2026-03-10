@@ -1,61 +1,62 @@
-# [Project] 맥락 주입형 실시간 AI 자막 생성 시스템 (CARSS)
+# [Final Project] 맥락 주입형 실시간 AI 자막 생성 시스템 (CARSS)
+## : Adaptive ASR with Semantic Conditioning & Dynamic Correction
 
 ## 1. 개요 (Overview)
-본 프로젝트는 전문 용어 오인식 및 화자 억양 문제를 해결하기 위해, 영상의 주제와 특징을 '맥락(Context)'으로 입력받아 추론에 개입시키는 지식 중심(Knowledge-centric) 실시간 자막 시스템이다.
-
-## 2. 핵심 컨셉 (Core Concept)
-* **No-Audio Training:** 실제 음성 녹음 데이터 추가 없이, 텍스트 기반의 도메인 지식과 맥락 힌트만으로 인식률을 교정한다.
-* **Contextual Prioritization:** 오디오 신호가 모호할 때, 사용자가 입력한 맥락(예: 수학, 인도인 억양 등)에 더 높은 가중치를 두어 단어를 선택한다.
+본 프로젝트는 2024년 발표된 SOTA 모델인 **NVIDIA Canary-1B**를 기반으로 한다. 단순히 소리를 텍스트로 바꾸는 기존 방식을 넘어, **ControlNet 아키텍처에서 영감을 얻은 추가 컨디셔닝 레이어**를 통해 사용자 맥락(주제, 전문 용어)을 음성 인식 과정에 강제로 주입하고, 실시간으로 인식 오류를 교정하는 고성능 자막 시스템 구축을 목표로 한다.
 
 ---
 
-## 3. 시스템 구조 (System Architecture)
+## 2. 핵심 기술 아키텍처 (Core Technical Architecture)
 
-### 3.1. 클라이언트 (Client Side)
-* **기술 스택:** Python (PySide6 / Flet), PyAudio, WebSockets
-* **기능:** 시스템 오디오 루프백 캡처, 실시간 스트리밍 전송, 자막 오버레이 UI.
-* **사용자 입력:** 영상 특징(주제: 미적분, 화자: 인도인 억양, 전문 키워드 등).
+### 2.1. ASR: Semantic ControlNet Adapter (핵심 차별점)
+기본 ASR 모델의 가중치를 고정(Freeze)한 채, 이미지 생성 모델의 ControlNet처럼 **맥락 정보를 처리하는 별도의 어댑터 구조**를 설계한다.
+* **구조:** Canary-1B의 Encoder와 Decoder 사이에 사용자의 '맥락 텍스트'를 인코딩한 벡터를 주입하는 **Cross-Attention Adapter** 추가.
+* **작동:** 사용자가 "미적분" 입력을 주면, 어댑터가 "Differential", "Integral" 등 관련 토큰의 가중치를 물리적으로 증폭시켜 오디오가 모호해도 맥락에 맞는 단어가 우선 출력되도록 제어.
+* **장점:** 전체 모델 학습 없이 작은 어댑터 레이어만 학습하므로 4070 Ti(12GB)에서 충분히 학습 및 실시간 추론 가능.
 
-### 3.2. 서버 (Server Side)
-* **기술 스택:** FastAPI (Asynchronous), NVIDIA Triton Inference Server, Docker
-* **기능:** 무거운 AI 추론 수행 및 사용자별 맞춤형 **LoRA(Adapter) 모듈** 실시간 로드.
-* **확장성:** 도메인이 늘어나도 전체 모델 교체 없이 작은 어댑터 파일만 추가하여 확장 가능.
-
----
-
-## 4. AI 파이프라인 (AI Pipeline)
-
-
-
-1. **오디오 전처리 (VAD):** Silero VAD를 통한 목소리 구간 추출 및 서버 연산 효율화.
-2. **맥락 주입 음성 인식 (Context-Biased ASR):** - 모델: NVIDIA Canary-1B 또는 Faster-Whisper.
-   - 원리: 사용자 입력 텍스트를 프롬프트(Prompt)로 주입하여 도메인 특화 용어의 발생 확률(Logits)을 강제로 상향 조정.
-3. **LLM 맥락 정제 (Contextual Post-Editing):**
-   - 모델: Gemma-2B / Llama-3-8B (경량 LLM).
-   - 원리: ASR의 초안 결과물에서 맥락과 일치하지 않는 오인식 단어를 사용자 힌트를 바탕으로 최종 교정. (예: 'The live' → 'Derive')
-4. **도메인 특화 번역 (Domain-Specific Translation):**
-   - 정제된 텍스트를 맥락 기반 전문 용어 사전을 참조하여 정확한 타겟 언어로 변환.
+### 2.2. Post-Editing: RAG 기반 Dynamic Correction (LLM 학습 대체안)
+4070 Ti에서 8B 이상급 LLM을 미세 조정(Fine-tuning)하는 부담을 줄이기 위해, **학습 대신 '검색 증강(RAG)'과 'In-Context Learning'**을 결합한다.
+* **방법:** 1. 사용자가 선택한 도메인(예: 수학)의 **용어집(Glossary)**을 벡터 DB에 실시간 로드.
+  2. ASR 결과물이 나오면, LLM(Gemma-2B 또는 4-bit 양자화된 Llama-3)에게 **[ASR 결과 + 검색된 올바른 용어 + 사용자 맥락]**을 프롬프트로 전달.
+  3. LLM은 추가 학습 없이도 프롬프트에 담긴 정보를 바탕으로 'The live'를 'Derive'로 즉시 교정.
+* **장점:** 학습 서버 없이도 도메인 지식을 무한히 확장 가능하며 VRAM 점유율 최소화.
 
 ---
 
-## 5. 학습 및 모듈 확장 전략 (Training Strategy)
+## 3. AI 파이프라인 (Detailed Pipeline)
 
-**핵심: 소리 데이터가 아닌 '맥락 이해 및 반영 능력'을 학습시키는 것에 집중함.**
-
-### 5.1. 프롬프트 순응 학습 (Instruction Tuning)
-* **방법:** ASR 모델의 Decoder 부분에 LoRA(Low-Rank Adaptation) 적용.
-* **목표:** 모델이 입력받은 '맥락 텍스트'를 배경지식으로 강력하게 인지하여, 불분명한 발음을 맥락에 맞는 단어로 매핑하는 의존도를 높임.
-
-### 5.2. 가상 오인식 교정 학습 (Synthetic Error Correction)
-* **방법:** 텍스트 기반 데이터 합성 및 LLM 미세 조정.
-* **프로세스:**
-  1. 전문 분야(수학, 의학 등) 텍스트 코퍼스 수집.
-  2. 음성 인식에서 흔히 발생하는 발음 유사 오타(Phonetic Error) 생성.
-  3. `[오타 문장] + [맥락 키워드]`를 입력 시 `[정답 문장]`을 도출하도록 LLM 학습.
+1. **Audio Stream Capture:** 시스템 루프백 오디오 캡처 (Python PyAudio).
+2. **VAD (Voice Activity Detection):** Silero VAD를 이용한 발화 구간 분리.
+3. **Context Injection (ControlNet Layer):** 사용자 입력 맥락을 임베딩하여 ASR Decoder의 Attention 레이어에 바이어스(Bias)로 주입.
+4. **Contextual ASR Inference:** Canary-1B + Semantic Adapter를 통한 초안 자막 생성.
+5. **Dynamic Knowledge Retrieval:** 초안 자막 내 모호한 단어를 도메인 사전에서 검색하여 후보군 추출.
+6. **Prompt-based Refinement:** 경량 LLM이 프롬프트 지시사항에 따라 최종 자막 확정.
 
 ---
 
-## 6. 기대 효과 및 차별성
-* **실시간 전문성:** 사용자가 "이 영상은 인도 수학 강의다"라고 알려주는 순간, AI는 해당 도메인의 전문가 모드로 즉시 전환됨.
-* **데이터 효율성:** 대규모 음성 데이터 구축 없이 관련 텍스트와 용어집만으로 전용 어댑터(LoRA) 생성 가능.
-* **서버 기반 서비스:** 저사양 사용자 기기에서도 서버의 고성능 GPU 자원을 활용한 고품질 자막 이용 가능.
+## 4. 실현 가능성 및 하드웨어 최적화 (4070 Ti 12GB 기준)
+
+* **VRAM 배분 전략 (Total 12GB):**
+    - **Canary-1B (ASR):** FP16 기준 약 2~3GB 점유.
+    - **Gemma-2B (Refiner):** 4-bit 양자화 적용 시 약 1.5~2GB 점유.
+    - **ControlNet Adapter & Vector DB:** 약 1GB 미만 점유.
+    - **여유 공간:** 시스템 및 실시간 스트리밍 버퍼용으로 약 6~7GB 확보 가능.
+* **학습 전략:**
+    - ASR 어댑터는 **PEFT(LoRA)** 방식을 사용하며, 가상으로 생성된 `[오디오 특징 - 맥락 텍스트 - 정답]` 데이터를 통해 4070 Ti에서 수 시간 내 학습 완료 가능.
+
+---
+
+## 5. 핵심 챌린지 및 대응 방안
+
+### 5.1. 실시간성 (Latency) 관리
+- **문제:** ASR 이후 LLM 교정 단계가 추가되어 자막 지연 발생 우려.
+- **대응:** LLM 교정을 매 단어마다 하지 않고, 문장 마디(Chunk) 단위로 비동기 병렬 처리. ASR 초안은 즉시 출력하고 LLM 교정본은 0.5초 내에 업데이트하는 '이중 업데이트' 방식 채택.
+
+### 5.2. 컨디셔닝 레이어의 학습 데이터 부재
+- **문제:** 오디오 신호와 맥락 텍스트 간의 연관성을 학습시킬 데이터 부족.
+- **대응:** TTS(Text-to-Speech)를 활용하여 특정 도메인(수학 등)의 인공 음성을 대량 생성하고, 여기에 맥락 태그를 붙여 어댑터를 학습시키는 **가상 데이터 파이프라인** 구축.
+
+---
+
+## 6. 결론 및 기대 성과
+본 프로젝트는 **최신 SOTA 모델(Canary-1B)**, **ControlNet 스타일의 가이드 주입**, 그리고 **학습 효율을 극대화한 RAG 기반 교정**을 결합한 혁신적인 시도이다. 이를 통해 전문적인 환경(대학 강의, 기술 세미나)에서 사용자 맞춤형 초고정밀 자막 서비스를 실시간으로 제공할 수 있다.
